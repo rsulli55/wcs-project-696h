@@ -5,13 +5,18 @@ import numpy as np
 import pandas as pd
 
 termdf = pd.read_csv('term.txt', sep='\t', header=None, names=[
-                     'language', 'speaker', 'chip', 'term_abbrev'])
+                     'language', 'speaker', 'chip', 'term_abbrev'],
+                     na_filter=False)
 dictdf = pd.read_csv('dict.txt', sep='\t', skiprows=[0], names=[
-                     'language', 'term', 'translation', 'term_abbrev'])
+                     'language', 'term', 'translation', 'term_abbrev'],
+                     na_filter=False)
 chipdf = pd.read_csv('chip.txt', sep='\t', names=[
                      'chip', 'letter', 'number', 'letternumber'])
 
 NUM_CHIPS = 330
+NUM_LANGS = 110
+ALL_LANGS = [l for l in range(1, 111)]
+ALL_CHIPS = [c for c in range(1, 331)]
 # mappings between different indices
 chipnum_to_wcsgrid = {}
 for c in range(1, 331):
@@ -31,7 +36,7 @@ for i, c in enumerate('ABCDEFGHIJ'):
         matrix_to_chipnum[(i,j)] = wcsgrid_to_chipnum[(c, j)]
 
 
-def build_word_count(language: str):
+def build_word_count(language: int):
     lang_dict = dictdf.loc[dictdf['language'] == language]
     lang_terms = termdf.loc[termdf['language'] == language]
     num_terms = lang_dict['term'].max()
@@ -50,7 +55,7 @@ def build_word_count(language: str):
 
     return word_count
 
-def build_word_counts(languages: List[str]):
+def build_word_counts(languages: List[int]):
     word_counts = {}
     for lang in languages:
         word_counts[lang] = build_word_count(lang)
