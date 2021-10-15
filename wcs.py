@@ -1,5 +1,6 @@
 ## helper variables/functions to work with wcs data
 from typing import List
+from collections import namedtuple
 
 import numpy as np
 import pandas as pd
@@ -13,10 +14,13 @@ dictdf = pd.read_csv('dict.txt', sep='\t', skiprows=[0], names=[
 chipdf = pd.read_csv('chip.txt', sep='\t', names=[
                      'chip', 'letter', 'number', 'letternumber'])
 
+TermData = namedtuple('TermData', ['term', 'abbrev', 'translation'])
+
 NUM_CHIPS = 330
 NUM_LANGS = 110
 ALL_LANGS = [l for l in range(1, 111)]
 ALL_CHIPS = [c for c in range(1, 331)]
+
 # mappings between different indices
 chipnum_to_wcsgrid = {}
 for c in range(1, 331):
@@ -35,6 +39,25 @@ for i, c in enumerate('ABCDEFGHIJ'):
             continue
         matrix_to_chipnum[(i,j)] = wcsgrid_to_chipnum[(c, j)]
 
+def build_term_map(language: int):
+    lang_dict = dictdf.loc[dictdf['language'] == language]
+    lang_terms = termdf.loc[termdf['language'] == language]
+    num_terms = lang_dict['term'].max()
+    abbreviations = lang_dict['term_abbrev'].unique()
+    term_map = {}
+
+    for abbrev in abbreviations:
+        # use the smallest term index for the abbreviation
+        subset = lang_dict['term_abbrev'] == abbrev
+        terms = lang_dict.loc[subset]['term']
+        if terms.shape[0] > 1:
+            print("LANG {} ABBREV {} has more than one term".format(language, abbrev))
+        term = terms.min()
+        translation = (lang_dict.loc[subset, 'translation']).iloc[0]
+        term_data = TermData(term=term, abbrev=abbrev, translation=translation)
+        term_map[term] = term_data
+
+    return term_map
 
 def build_word_count(language: int):
     lang_dict = dictdf.loc[dictdf['language'] == language]
