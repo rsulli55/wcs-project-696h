@@ -50,8 +50,8 @@ def build_term_map(language: int):
         # use the smallest term index for the abbreviation
         subset = lang_dict['term_abbrev'] == abbrev
         terms = lang_dict.loc[subset]['term']
-        if terms.shape[0] > 1:
-            print("LANG {} ABBREV {} has more than one term".format(language, abbrev))
+        # if terms.shape[0] > 1:
+        #     print("LANG {} ABBREV {} has more than one term".format(language, abbrev))
         term = terms.min()
         translation = (lang_dict.loc[subset, 'translation']).iloc[0]
         term_data = TermData(term=term, abbrev=abbrev, translation=translation)
@@ -60,6 +60,8 @@ def build_term_map(language: int):
     return term_map
 
 def build_word_count(language: int):
+    """Returns a # of terms by NUM_CHIPS matrix where the (t,c) entry
+    counts the number of times term t was used for chip c"""
     lang_dict = dictdf.loc[dictdf['language'] == language]
     lang_terms = termdf.loc[termdf['language'] == language]
     num_terms = lang_dict['term'].max()
