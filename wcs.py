@@ -172,7 +172,7 @@ def all_pairwise_color_distances():
 
 def make_color_distances_hist(distances):
     "Make a histogram of the pairwise color distances"
-    filename = "color_distances_hist.pdf"
+    filename = "output/color_distances_hist.pdf"
     title = "Pairwise $\Delta E$ color distance"
 
     fig, ax = plt.subplots()
