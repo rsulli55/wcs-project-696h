@@ -1,6 +1,6 @@
 ## helper variables/functions to work with wcs data
 from typing import List
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 import numpy as np
 import pandas as pd
@@ -43,6 +43,14 @@ for i, c in enumerate('ABCDEFGHIJ'):
         if (c == 'A' or c == 'J') and j > 0:
             continue
         matrix_to_chipnum[(i,j)] = wcsgrid_to_chipnum[(c, j)]
+        
+chipnum_to_matrix = {}
+for i,j in matrix_to_chipnum:
+    chipnum_to_matrix[matrix_to_chipnum[(i,j)]] = (i,j)
+
+matrix_to_wcsgrid = {}
+for i,j in matrix_to_chipnum:
+    matrix_to_wcsgrid[(i, j)] = chipnum_to_wcsgrid[matrix_to_chipnum[(i, j)]]
 
 def build_term_map(language: int):
     lang_dict = dictdf.loc[dictdf['language'] == language]
@@ -182,33 +190,59 @@ def make_color_distances_hist(distances):
     ax.set_title(title)
     fig.savefig(filename)
 
+def build_adjacency_dict(distances, threshold):
+    """make the adjacency dict using the given threshold"""
+    edge_relationship = (distances > 0.001) & (distances < threshold)
+    indices = np.where(edge_relationship)
+    adjacencies = defaultdict(list)
+    for i in range(len(indices[0])):
+        c1, c2 = indices[0][i]+1, indices[1][i]+1
+        adjacencies[c1].append(c2)
+        adjacencies[c2].append(c1)
+
+    return adjacencies
 
 
-        
+def build_border_distances(distances):
+    """returns a dictionary of 'border distances':
+        the keys are chip matrix positions (i,j)
+        the values are Lists of up to four tuples ((n_i, n_j), d)
+        where (n_i, n_j) is the neighbor chip matrix position and d is the distance
+        between (i, j) and (n_i, n_j) provided in `distances`"""
+    total_rows = len('ABCDEFGHIJ')
+    total_cols = 41
 
+    border_distances = {}
+    for i, c in enumerate('ABCDEFGHIJ'):
+        jvals = range(41)
+        if c == 'A' or c == 'J':
+            jvals = [0]
+        for j in jvals:
+            b_dists = []
+            chipnum = matrix_to_chipnum[(i, j)]
+            
+            for (row, col) in [(-1, 0), (0, -1), (0, 1), (1, 0)]:
+                nhbr = ((i+row) % total_rows, (j+col) % total_cols)
+                if nhbr in matrix_to_chipnum:
+                    nhbr_chipnum = matrix_to_chipnum[nhbr]
+                    d = max(distances[chipnum-1, nhbr_chipnum-1], distances[nhbr_chipnum-1, chipnum-1])
+                    b_dists.append((nhbr, d))
 
+            # special case for row B: A, 0 is above all of B row
+            if c == 'B' and j > 0:
+                nhbr = (i - 1, 0)
+                nhbr_chipnum = matrix_to_chipnum[nhbr]
+                d = max(distances[chipnum-1, nhbr_chipnum-1], distances[nhbr_chipnum-1, chipnum-1])
+                b_dists.append((nhbr, d))
 
+            # special case for row I: J, 0 is below all of I row
+            if c == 'I' and j > 0:
+                nhbr = (i + 1, 0)
+                nhbr_chipnum = matrix_to_chipnum[nhbr]
+                d = max(distances[chipnum-1, nhbr_chipnum-1], distances[nhbr_chipnum-1, chipnum-1])
+                b_dists.append((nhbr, d))
+                    
+            border_distances[(i, j)] = b_dists
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return border_distances
+    
