@@ -390,11 +390,13 @@ def build_simple_model(word_count):
         the weight is calculated based on the frequency of times term_num was used for chipnum"""
     
     num_terms = word_count.shape[0]
-    num_responses = np.sum(word_count[:, 0])
+    orig_num_responses = np.sum(word_count[:, 0])
     model = defaultdict(dict)
     for chip in ALL_CHIPS:
         terms = np.argwhere(word_count[:, chip-1] > 0)
-        assert(num_responses == np.sum(word_count[terms, chip-1]))
+        num_responses = np.sum(word_count[terms, chip-1])
+        if orig_num_responses != num_responses:
+            print(f"Orig_num_responses {orig_num_responses} does not match num_responses {num_responses} for chip {chip} and terms {word_count[terms, chip-1]}")
         for t in terms:
             term_num = t[0] + 1
             model[chip][term_num] = word_count[term_num-1, chip-1] / num_responses
@@ -522,8 +524,7 @@ def all_langs_simple_NLL_experiment(num_trials, fraction):
 
 def find_problem_langs():
     problems = set()
-    for language in ALL_LANGS:
-        stop = False
+    for language in range(NUM_LANGS):
         print(f"Checking language {language}")
         lang_speakers = spkrdf.loc[spkrdf['language'] == language]['speaker']
         lang_terms = termdf.loc[termdf['language'] == language]
@@ -534,25 +535,104 @@ def find_problem_langs():
                     print(f"\tIssue with language {language}, speaker {speaker}, and chip {chip}")
                     print(f"\t{lang_terms[subset]['term_abbrev']}")
                     problems.add(language)
-                    stop = True
-                    break
-            if stop:
-                break
 
     return problems
 
+def check_langs_data(language):
+    print(f"Checking language {language}")
+    lang_speakers = spkrdf.loc[spkrdf['language'] == language]['speaker']
+    lang_terms = termdf.loc[termdf['language'] == language]
+    for speaker in lang_speakers:
+        for chip in range(NUM_CHIPS):
+            subset = (lang_terms['speaker'] == speaker) & (lang_terms['chip'] == chip + 1)
+            if len(lang_terms[subset]['term_abbrev']) != 1:
+                print(f"\tIssue with language {language}, speaker {speaker}, and chip {chip}")
+                print(f"\t{lang_terms[subset]['term_abbrev']}")
 
 
 
 
+def sample_initial_grid_state(word_count, adjacency_dict, num_samples, response_sample_fraction):
+    """ word_count is the word matrix for the language,
+        adjacency_dict is the adjacency_dict created by build_adjacency_dict()
+        num_samples is how many total samples (of the whole grid) to perform before returning the grid
+        response_sample_fraction: for an individual chip sample, how often should we sample from the response set
+        the grid has the following interpretation
+        grid[c-1] = t-1 iff chip c is labeled term t"""
 
+    grid = np.zeros(NUM_CHIPS, dtype=np.int16)
+    response_probs = build_simple_model(word_count)
+    response_cdf = {}
+    cdf_entry = namedtuple('cdf_entry', ['term', 'val'])
+
+    # build initial grid configuration and response cdfs for each chip
+    for chip in ALL_CHIPS:
+        cdf = []
+        val = 0
+        probs = response_probs[chip]
+        dec_probs = sorted(probs, key=lambda t: probs[t], reverse=True)
+        for term in dec_probs:
+            val += probs[term]
+            cdf.append(cdf_entry(term=term, val=val))
+
+        # cdf[0] stores the most likely term
+        grid[chip-1] = cdf[0].term - 1
+        response_cdf[chip] = cdf
+
+    rng = np.random.default_rng()
+
+    for sample in range(num_samples):
+        print(f"Working on sample {sample+1} of grid")
+        for chip in ALL_CHIPS:
+            p = rng.uniform()
+            # sample from response cdf
+            if p < response_sample_fraction:
+                p = rng.uniform()
+                cdf = response_cdf[chip]
+                found = False
+                for c in cdf:
+                    if p < c.val:
+                        grid[chip-1] = c.term - 1
+                        found = True
+                assert(found)
             
+            # otherwise sample proportionally to current labels on chip and neighbors
+            else:
+                # count the frequency of terms
+                terms = defaultdict(int)
+                # count ourself
+                terms[grid[chip-1]+1] += 1
+                num_terms = 1
+                neighbors = adjacency_dict[chip]
+                for nhbr in neighbors:
+                    terms[grid[nhbr-1]+1] += 1
+                    num_terms += 1
+
+                # build the cdf over the terms
+                cdf = []
+                val = 0
+                dec_freq = sorted(terms, key=lambda t: terms[t], reverse=True)
+                for t in dec_freq:
+                    val += terms[t] / num_terms
+                    cdf.append(cdf_entry(term=t, val=val))
+
+                # if len(cdf) > 1:
+                #     print(f"Chip {chip} has interesting cdf {cdf}")
+                p = rng.uniform()
+                found = False
+                for c in cdf:
+                    if p < c.val:
+                        grid[chip-1] = c.term - 1
+                        # if len(cdf) > 1:
+                        #     print(f"Previously, grid has {grid[chip-1]+1}, now we use {c}")
+                        found = True
+                assert(found)
+
+
+    return grid
 
 
 
 
 
 
-
-
-    
