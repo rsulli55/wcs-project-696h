@@ -4,7 +4,10 @@ from collections import namedtuple, defaultdict
 
 import numpy as np
 import pandas as pd
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import matplotlib.ticker as ticker
+import matplotlib.cm
 
 termdf = pd.read_csv('term.txt', sep='\t', header=None, names=[
                      'language', 'speaker', 'chip', 'term_abbrev'],
@@ -18,13 +21,25 @@ chipdf = pd.read_csv('chip.txt', sep='\t', names=[
 colordf = pd.read_csv('cnum-vhcm-lab-new.txt', sep='\t', skiprows=1,
                     names=['chip', 'V', 'H', 'C', 'MunH', 'MunV', 'L', 'a', 'b'])
 
+spkrdf = pd.read_csv('spkr-lsas.txt', sep='\t', names=[
+                     'language', 'speaker', 'age', 'sex'])
+
 TermData = namedtuple('TermData', ['term', 'abbrev', 'translation'])
 LabCoord = namedtuple('LabCoord', ['L', 'a', 'b'])
 
 NUM_CHIPS = 330
 NUM_LANGS = 110
 ALL_LANGS = [l for l in range(1, 111)]
+# 3 languages do not have responses for every chip from every speaker
+# found by running find_problem_langs() from below
+BAD_LANGS = set([62, 88, 93])
+for l in BAD_LANGS:
+    ALL_LANGS.remove(l)
+
 ALL_CHIPS = [c for c in range(1, 331)]
+
+CONTESTED_TERM = TermData(term=-2, abbrev='Co', translation='Contested')
+NO_TERM = TermData(term=-1, abbrev="No", translation="None")
 
 # mappings between different indices
 chipnum_to_wcsgrid = {}
@@ -245,4 +260,379 @@ def build_border_distances(distances):
             border_distances[(i, j)] = b_dists
 
     return border_distances
+
+def build_simple_mle(word_count, term_map):
+    """Returns 
+    1. a map of chipnum -> TermData where each
+       chipnum is mapped to the majority term for that chip,
+       if there is no majority, it is mapped to CONTESTED_TERM
+    2. a list of all the MLE terms found i.e. the BCTs
+    3. the number of BCTs"""
+    mles = {}
+    bcts = set()
     
+    for chip in ALL_CHIPS:
+        terms = np.argwhere(word_count[:, chip-1] == np.max(word_count[:, chip-1]))
+        if len(terms) > 1:
+            print("Chip {} was contested".format(chip))
+            mles[chip] = CONTESTED_TERM
+        else:
+            term = terms[0,0]
+            mles[chip] = term_map[term+1]
+            bcts.add(term_map[term+1])
+            
+        # print("Row data for chip {}".format(chip))
+        # print(word_count[:, chip-1])
+        # print("for chip {} got mle = {}".format(chip, mle[chip]))
+    
+    return mles, list(bcts), len(bcts)
+
+def color_term_grid(term_map, title, filename, lang):
+    """term_map should be a dict of chipnums -> TermData
+    this function will collapse the term numbers to the range [0, # of unique terms]
+    `title` and `filename` should be strings, and `lang` should be an int in the range 1 to 110
+    Saves a grid with title Title {title} for Lang {lang} and 
+    Filename lang{lang}_filename.png
+    """
+    # plot the wcs grid with the mle estimate
+    fig, ax = plt.subplots()
+    num_cols = 41
+    num_rows = len('ABCDEFGHIJ')
+    X, Y = np.meshgrid(np.arange(num_cols), np.arange(num_rows))
+    Z = np.zeros((num_rows, num_cols), dtype=int)
+   
+    cmap_list = ['xkcd:pale yellow', 'white', 'xkcd:light pink', 'xkcd:peach', 'xkcd:beige',
+                 'xkcd:salmon', 'xkcd:lilac', 'xkcd:orangered',
+                 'xkcd:tan', 'xkcd:puke green', 'xkcd:rose',
+                 'xkcd:seafoam green', 'xkcd:grass green', 'xkcd:baby blue',
+                 'xkcd:olive', 'xkcd:forest green', 'xkcd:deep blue',
+                 'xkcd:purple blue', 'xkcd:chocolate', 'xkcd:charcoal', 
+                 'xkcd:fuschia', 'xkcd:greyish purple']
+    if len(np.unique(term_map.values())) > len(cmap_list) - 1:
+        print("ERROR: too many cats, cmap does not have enough colors")
+    
+    # get a set of all mle_terms we will care about
+    mle_terms = set([(data.term, data.abbrev) for data in term_map.values()])
+    mle_terms.add((NO_TERM.term, NO_TERM.abbrev))
+    # sort them and store abbreviation labels
+    mle_terms = sorted(mle_terms)
+    abbrev_labels = [pair[1] for pair in mle_terms]
+
+    # collapse the terms numbers to the range [0, num_mle_terms]
+    sorted_terms = [pair[0] for pair in mle_terms]
+    collapsed_terms = {}
+    for collapsed, term in enumerate(sorted_terms):
+        collapsed_terms[term] = collapsed
+    collapsed_counts = defaultdict(int)
+    
+    for row in range(num_rows):
+        for col in range(num_cols):
+            if (row, col) in matrix_to_chipnum:
+                term = term_map[matrix_to_chipnum[(row, col)]].term
+                Z[row, col] = collapsed_terms[term]
+                collapsed_counts[collapsed_terms[term]] += 1
+            else:
+                Z[row, col] = collapsed_terms[NO_TERM.term]
+                collapsed_counts[collapsed_terms[NO_TERM.term]] += 1
+                # print("using no_mle_val for col {} and row {}".format(col, row))
+
+    
+    cmap = ListedColormap(cmap_list[:len(abbrev_labels)])
+    mesh = ax.pcolormesh(X, Y, Z, shading='auto', edgecolors='black', cmap=cmap)
+    # pcolormesh needs to have data flipped
+    ax.invert_yaxis()
+    
+    # colorbar and ticks alignment
+    cbar = fig.colorbar(matplotlib.cm.ScalarMappable(cmap=cmap), ax=ax)
+    tick_spacing = 1.0 / len(abbrev_labels)
+    ticks = ticker.FixedLocator(np.arange(tick_spacing/2.0, 1.0, tick_spacing))
+    cbar.set_ticks(ticks)
+    tick_texts = cbar.ax.set_yticklabels(abbrev_labels)
+    # tick_texts[0].set_verticalalignment('top')
+    # tick_texts[-1].set_verticalalignment('bottom')
+    cbar.ax.tick_params(length=0) # remove the tick marks
+
+    # setup grid labels and title
+    ax.set_title(f"{title} for Language {lang}")
+    ax.set_xticks(np.arange(num_cols))
+    ax.set_yticks(np.arange(num_rows))
+    ax.set_xticklabels([str(i) for i in range(41)])
+    ax.set_yticklabels([c for c in 'ABCDEFGHIJ'])
+    ax.tick_params(top=True, bottom=False, labeltop=True, labelbottom=False)
+
+    fig.set_size_inches((36, 8))
+    # plt.show()
+    plt.savefig(f"output/lang{lang}_{filename}.png")
+
+
+def build_maj_vote_model(word_count):
+    """ builds the parameters for the majority vote model:
+        returns a dict which maps chipnum -> (dict of term_num -> weight)
+        if there is a simple majority for chipnum c then the value at c will
+        be a one element dict with key being the simple majority term and weight being 1
+        if there is not a simple majority for chipnum c then the value at c will represent
+        a uniform distribution over all terms which were spoken the maximal amount of times"""
+        
+    model = defaultdict(dict)
+    for chip in ALL_CHIPS:
+        terms = np.argwhere(word_count[:, chip-1] == np.max(word_count[:, chip-1]))
+        for t in terms:
+            term_num = t[0] + 1
+            model[chip][term_num]=1.0/len(terms)
+        if len(terms) > 1:
+            print(f"For chip={chip} model[chip] is {model[chip]}")
+
+    return model
+
+def build_simple_model(word_count):
+    """ builds the parameters for the majority vote model:
+        returns a dict which maps chipnum -> (dict of term_nums -> weight)
+        the weight is calculated based on the frequency of times term_num was used for chipnum"""
+    
+    num_terms = word_count.shape[0]
+    orig_num_responses = np.sum(word_count[:, 0])
+    model = defaultdict(dict)
+    for chip in ALL_CHIPS:
+        terms = np.argwhere(word_count[:, chip-1] > 0)
+        num_responses = np.sum(word_count[terms, chip-1])
+        if orig_num_responses != num_responses:
+            print(f"Orig_num_responses {orig_num_responses} does not match num_responses {num_responses} for chip {chip} and terms {word_count[terms, chip-1]}")
+        for t in terms:
+            term_num = t[0] + 1
+            model[chip][term_num] = word_count[term_num-1, chip-1] / num_responses
+
+    return model
+
+def build_held_out_word_count(language, speakers):
+    """ language: is a language number [1, 110]
+        speakers: list of speaker numbers to hold out
+        returns a matrix, dict pair where
+        the matrix is a # of terms by NUM_CHIPS matrix W where 
+        W[t-1, c-1] = n iff term t was used n times for chip c 
+        the dict has represents the held out speaker data
+        so it has keys coming from `speakers` and values are 
+        length NUM_CHIPS arrays A where
+        A[c-1] = t-1 iff term t was used on chip c
+    """
+    lang_dict = dictdf.loc[dictdf['language'] == language]
+    lang_terms = termdf.loc[termdf['language'] == language]
+    num_terms = lang_dict['term'].max()
+    abbreviations = lang_dict['term_abbrev'].unique()
+    termabbrev_map = {}
+    for abbrev in abbreviations:
+        # use the smallest term index for the abbreviation
+        subset = lang_dict['term_abbrev'] == abbrev
+        termabbrev_map[abbrev] = lang_dict[subset]['term'].min()
+
+    word_count = np.zeros((num_terms, NUM_CHIPS), dtype=int)
+    for abbrev in abbreviations:
+        for chip in range(NUM_CHIPS):
+            subset = (lang_terms['term_abbrev'] == abbrev) & (lang_terms['chip'] == chip + 1)
+            # remove held out speakers
+            subset = subset & ~lang_terms['speaker'].isin(speakers)
+            word_count[termabbrev_map[abbrev]-1, chip] = lang_terms[subset]['chip'].count()
+
+    held_out = {}
+    for speaker in speakers:
+        responses = np.zeros(NUM_CHIPS, dtype=int)
+        for chip in range(NUM_CHIPS):
+            subset = (lang_terms['speaker'] == speaker) & (lang_terms['chip'] == chip + 1)
+            if len(lang_terms[subset]['term_abbrev']) != 1:
+                print(f"\tIssue building hold out set for language {language}")
+                print(f"\tlang_terms[subset]['term_abbrev']) is not one element") 
+                print(f"\tWe are looking at speaker {speaker}, and chip {chip}")
+                print(f"\t{lang_terms[subset]['term_abbrev']}")
+                assert(len(lang_terms[subset]['term_abbrev']) == 1)
+            abbrev = lang_terms[subset]['term_abbrev'].iloc[0]
+            responses[chip] = termabbrev_map[abbrev]-1
+        held_out[speaker] = responses
+
+
+    return word_count, held_out
+
+
+def build_rand_set_of_speakers(language, fraction):
+    """returns a List of speakers chosen randomly
+    without replacement from the set of speakers for language `language`
+    the size of the List is determinde by `fraction`"""
+
+    lang_speakers = spkrdf.loc[spkrdf['language'] == language]['speaker']
+    rand_set = lang_speakers.sample(frac=fraction)
+    return list(rand_set)
+
+
+def compute_simple_NLL(held_out, model):
+    """computes the NLL using model for the chip responses in the dict held_out
+    returns NLL, and # of problems where a problem occurs if a chip response has zero probability
+    in the model"""
+    nll = 0
+    total_probs = 0
+    for spkr in held_out:
+        responses = held_out[spkr]
+        for chip in ALL_CHIPS:
+            term = responses[chip-1] + 1
+            log_prob = 0
+            if term not in model[chip]:
+                print(f"Problem with speaker {spkr} for chip {chip}, where response was term {term}")
+                total_probs += 1
+                log_prob = np.log(1.0/NUM_CHIPS)
+            else:
+                log_prob = np.log(model[chip][term])
+            nll -= log_prob
+
+    return nll, total_probs
+
+def simple_NLL_experiment(language, num_trials, fraction):
+    """performs num_trials experiments where each experiment 
+    consists of holding out `fraction` percent of speakers,
+    creating the "simple model" for the empirical chip distribution,
+    computing the NLL of the held out speakers
+
+    returns the average NLL over all trials, and the average number of problems
+    per experiment when computing NLL"""
+
+    total_nll = 0
+    total_probs = 0
+    for trial in range(num_trials):
+        print(f"Running trial {trial} of experiment for language {language}")
+        print("------------------------------------------------------------------\n")
+        ho_speakers = build_rand_set_of_speakers(language, fraction)
+        wc, ho = build_held_out_word_count(language, ho_speakers)
+        model = build_simple_model(wc)
+        nll, probs = compute_simple_NLL(ho, model)
+        total_nll += nll
+        total_probs += probs
+
+    return total_nll / num_trials, total_probs / num_trials
+
+def all_langs_simple_NLL_experiment(num_trials, fraction):
+    """calls simple_NLL_experiment(lang, num_trials, fraction) for each lang
+    returns a two numpy arrays, each of lange NUM_LANGS which store
+    average nll and average number of problems at respectively at index
+    lang -1
+    Note: the experiment is not run for the three languages in BAD_LANGS"""
+    ave_nlls = np.zeros(NUM_LANGS)
+    ave_probs = np.zeros(NUM_LANGS)
+
+    for lang in ALL_LANGS:
+        print(f"Running experiment for language {lang}\n\n")
+        nll, probs = simple_NLL_experiment(lang, num_trials, fraction)
+        ave_nlls[lang-1] = nll
+        ave_probs[lang-1] = probs
+
+    return ave_nlls, ave_probs
+
+def find_problem_langs():
+    problems = set()
+    for language in range(NUM_LANGS):
+        print(f"Checking language {language}")
+        lang_speakers = spkrdf.loc[spkrdf['language'] == language]['speaker']
+        lang_terms = termdf.loc[termdf['language'] == language]
+        for speaker in lang_speakers:
+            for chip in range(NUM_CHIPS):
+                subset = (lang_terms['speaker'] == speaker) & (lang_terms['chip'] == chip + 1)
+                if len(lang_terms[subset]['term_abbrev']) != 1:
+                    print(f"\tIssue with language {language}, speaker {speaker}, and chip {chip}")
+                    print(f"\t{lang_terms[subset]['term_abbrev']}")
+                    problems.add(language)
+
+    return problems
+
+def check_langs_data(language):
+    print(f"Checking language {language}")
+    lang_speakers = spkrdf.loc[spkrdf['language'] == language]['speaker']
+    lang_terms = termdf.loc[termdf['language'] == language]
+    for speaker in lang_speakers:
+        for chip in range(NUM_CHIPS):
+            subset = (lang_terms['speaker'] == speaker) & (lang_terms['chip'] == chip + 1)
+            if len(lang_terms[subset]['term_abbrev']) != 1:
+                print(f"\tIssue with language {language}, speaker {speaker}, and chip {chip}")
+                print(f"\t{lang_terms[subset]['term_abbrev']}")
+
+
+
+
+def sample_initial_grid_state(word_count, adjacency_dict, num_samples, response_sample_fraction):
+    """ word_count is the word matrix for the language,
+        adjacency_dict is the adjacency_dict created by build_adjacency_dict()
+        num_samples is how many total samples (of the whole grid) to perform before returning the grid
+        response_sample_fraction: for an individual chip sample, how often should we sample from the response set
+        the grid has the following interpretation
+        grid[c-1] = t-1 iff chip c is labeled term t"""
+
+    grid = np.zeros(NUM_CHIPS, dtype=np.int16)
+    response_probs = build_simple_model(word_count)
+    response_cdf = {}
+    cdf_entry = namedtuple('cdf_entry', ['term', 'val'])
+
+    # build initial grid configuration and response cdfs for each chip
+    for chip in ALL_CHIPS:
+        cdf = []
+        val = 0
+        probs = response_probs[chip]
+        dec_probs = sorted(probs, key=lambda t: probs[t], reverse=True)
+        for term in dec_probs:
+            val += probs[term]
+            cdf.append(cdf_entry(term=term, val=val))
+
+        # cdf[0] stores the most likely term
+        grid[chip-1] = cdf[0].term - 1
+        response_cdf[chip] = cdf
+
+    rng = np.random.default_rng()
+
+    for sample in range(num_samples):
+        print(f"Working on sample {sample+1} of grid")
+        for chip in ALL_CHIPS:
+            p = rng.uniform()
+            # sample from response cdf
+            if p < response_sample_fraction:
+                p = rng.uniform()
+                cdf = response_cdf[chip]
+                found = False
+                for c in cdf:
+                    if p < c.val:
+                        grid[chip-1] = c.term - 1
+                        found = True
+                assert(found)
+            
+            # otherwise sample proportionally to current labels on chip and neighbors
+            else:
+                # count the frequency of terms
+                terms = defaultdict(int)
+                # count ourself
+                terms[grid[chip-1]+1] += 1
+                num_terms = 1
+                neighbors = adjacency_dict[chip]
+                for nhbr in neighbors:
+                    terms[grid[nhbr-1]+1] += 1
+                    num_terms += 1
+
+                # build the cdf over the terms
+                cdf = []
+                val = 0
+                dec_freq = sorted(terms, key=lambda t: terms[t], reverse=True)
+                for t in dec_freq:
+                    val += terms[t] / num_terms
+                    cdf.append(cdf_entry(term=t, val=val))
+
+                # if len(cdf) > 1:
+                #     print(f"Chip {chip} has interesting cdf {cdf}")
+                p = rng.uniform()
+                found = False
+                for c in cdf:
+                    if p < c.val:
+                        grid[chip-1] = c.term - 1
+                        # if len(cdf) > 1:
+                        #     print(f"Previously, grid has {grid[chip-1]+1}, now we use {c}")
+                        found = True
+                assert(found)
+
+
+    return grid
+
+
+
+
+
+
