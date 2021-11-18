@@ -395,8 +395,8 @@ def build_simple_model(word_count):
     for chip in ALL_CHIPS:
         terms = np.argwhere(word_count[:, chip-1] > 0)
         num_responses = np.sum(word_count[terms, chip-1])
-        if orig_num_responses != num_responses:
-            print(f"Orig_num_responses {orig_num_responses} does not match num_responses {num_responses} for chip {chip} and terms {word_count[terms, chip-1]}")
+        # if orig_num_responses != num_responses:
+        #     print(f"Orig_num_responses {orig_num_responses} does not match num_responses {num_responses} for chip {chip} and terms {word_count[terms, chip-1]}")
         for t in terms:
             term_num = t[0] + 1
             model[chip][term_num] = word_count[term_num-1, chip-1] / num_responses
@@ -437,6 +437,10 @@ def build_held_out_word_count(language, speakers):
         responses = np.zeros(NUM_CHIPS, dtype=int)
         for chip in range(NUM_CHIPS):
             subset = (lang_terms['speaker'] == speaker) & (lang_terms['chip'] == chip + 1)
+            # ignore responses where the term_abbrev was "*"
+            if lang_terms[subset]['term_abbrev'].isin(['*']).any():
+                # print(lang_terms[subset]['term_abbrev'])
+                continue
             if len(lang_terms[subset]['term_abbrev']) != 1:
                 print(f"\tIssue building hold out set for language {language}")
                 print(f"\tlang_terms[subset]['term_abbrev']) is not one element") 
@@ -465,6 +469,7 @@ def compute_simple_NLL(held_out, model):
     """computes the NLL using model for the chip responses in the dict held_out
     returns NLL, and # of problems where a problem occurs if a chip response has zero probability
     in the model"""
+    AVE_NUM_SPKRS = 24
     nll = 0
     total_probs = 0
     for spkr in held_out:
@@ -473,9 +478,9 @@ def compute_simple_NLL(held_out, model):
             term = responses[chip-1] + 1
             log_prob = 0
             if term not in model[chip]:
-                print(f"Problem with speaker {spkr} for chip {chip}, where response was term {term}")
+                # print(f"Problem with speaker {spkr} for chip {chip}, where response was term {term}")
                 total_probs += 1
-                log_prob = np.log(1.0/NUM_CHIPS)
+                log_prob = np.log(1.0/AVE_NUM_SPKRS)
             else:
                 log_prob = np.log(model[chip][term])
             nll -= log_prob
@@ -494,8 +499,8 @@ def simple_NLL_experiment(language, num_trials, fraction):
     total_nll = 0
     total_probs = 0
     for trial in range(num_trials):
-        print(f"Running trial {trial} of experiment for language {language}")
-        print("------------------------------------------------------------------\n")
+        # print(f"Running trial {trial} of experiment for language {language}")
+        # print("------------------------------------------------------------------\n")
         ho_speakers = build_rand_set_of_speakers(language, fraction)
         wc, ho = build_held_out_word_count(language, ho_speakers)
         model = build_simple_model(wc)
