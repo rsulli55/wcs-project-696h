@@ -729,6 +729,40 @@ def build_mrf_model_from_samples(samples):
     return model
 
 
+def compute_KL_divs(p_model, q_model):
+    """Assumes that `p_model` and `q_model` are dicts of the form chipnum -> (termnum -> weight)
+    like those obtained from build_mrf_model_from_samples and build_simple_model
+    Returns an array of the KL divergences between each model on every chip
+
+    For each chip, we compute KL(p_model[chip] || q_model[chip])"""
+
+    divergences = np.zeros(NUM_CHIPS)
+
+    epsilon = 1E-8
+
+    for chip in ALL_CHIPS:
+        p = p_model[chip]
+        q = q_model[chip]
+
+        terms = set(p.keys()).union(q.keys())
+        print(f"For chip {chip}, terms from both dists are {terms}")
+
+        for term in terms:
+            # if p[term] = 0, divergence computation is 0
+            if term not in p:
+                continue
+            # add in small positive if q[term] = 0
+            if term not in q:
+                print(f"Term {term} was in in distribution Q!")
+                q[term] = epsilon
+            else:
+                divergences[chip-1] += p[term] * np.log(p[term] / q[term])
+
+    return divergences
+
+
+
+
 
 
 
