@@ -9,6 +9,8 @@ from matplotlib.colors import ListedColormap
 import matplotlib.ticker as ticker
 import matplotlib.cm
 
+from scipy.special import softmax
+
 termdf = pd.read_csv('term.txt', sep='\t', header=None, names=[
                      'language', 'speaker', 'chip', 'term_abbrev'],
                      na_filter=False)
@@ -26,6 +28,7 @@ spkrdf = pd.read_csv('spkr-lsas.txt', sep='\t', names=[
 
 TermData = namedtuple('TermData', ['term', 'abbrev', 'translation'])
 LabCoord = namedtuple('LabCoord', ['L', 'a', 'b'])
+CdfEntry = namedtuple('CdfEntry', ['term', 'val'])
 
 NUM_CHIPS = 330
 NUM_LANGS = 110
@@ -40,6 +43,8 @@ ALL_CHIPS = [c for c in range(1, 331)]
 
 CONTESTED_TERM = TermData(term=-2, abbrev='Co', translation='Contested')
 NO_TERM = TermData(term=-1, abbrev="No", translation="None")
+    
+RNG = np.random.default_rng()
 
 # mappings between different indices
 chipnum_to_wcsgrid = {}
@@ -281,10 +286,6 @@ def build_simple_mle(word_count, term_map):
             mles[chip] = term_map[term+1]
             bcts.add(term_map[term+1])
             
-        # print("Row data for chip {}".format(chip))
-        # print(word_count[:, chip-1])
-        # print("for chip {} got mle = {}".format(chip, mle[chip]))
-    
     return mles, list(bcts), len(bcts)
 
 def color_term_grid(term_map, title, filename, lang):
@@ -568,7 +569,6 @@ def sample_initial_grid_state(word_count, adjacency_dict, num_samples, response_
     grid = np.zeros(NUM_CHIPS, dtype=np.int16)
     response_probs = build_simple_model(word_count)
     response_cdf = {}
-    cdf_entry = namedtuple('cdf_entry', ['term', 'val'])
 
     # build initial grid configuration and response cdfs for each chip
     for chip in ALL_CHIPS:
@@ -578,21 +578,19 @@ def sample_initial_grid_state(word_count, adjacency_dict, num_samples, response_
         dec_probs = sorted(probs, key=lambda t: probs[t], reverse=True)
         for term in dec_probs:
             val += probs[term]
-            cdf.append(cdf_entry(term=term, val=val))
+            cdf.append(CdfEntry(term=term, val=val))
 
         # cdf[0] stores the most likely term
         grid[chip-1] = cdf[0].term - 1
         response_cdf[chip] = cdf
 
-    rng = np.random.default_rng()
-
     for sample in range(num_samples):
-        print(f"Working on sample {sample+1} of grid")
+        # print(f"Working on sample {sample+1} of grid")
         for chip in ALL_CHIPS:
-            p = rng.uniform()
+            p = RNG.uniform()
             # sample from response cdf
             if p < response_sample_fraction:
-                p = rng.uniform()
+                p = RNG.uniform()
                 cdf = response_cdf[chip]
                 found = False
                 for c in cdf:
@@ -619,11 +617,11 @@ def sample_initial_grid_state(word_count, adjacency_dict, num_samples, response_
                 dec_freq = sorted(terms, key=lambda t: terms[t], reverse=True)
                 for t in dec_freq:
                     val += terms[t] / num_terms
-                    cdf.append(cdf_entry(term=t, val=val))
+                    cdf.append(CdfEntry(term=t, val=val))
 
                 # if len(cdf) > 1:
                 #     print(f"Chip {chip} has interesting cdf {cdf}")
-                p = rng.uniform()
+                p = RNG.uniform()
                 found = False
                 for c in cdf:
                     if p < c.val:
@@ -635,6 +633,130 @@ def sample_initial_grid_state(word_count, adjacency_dict, num_samples, response_
 
 
     return grid
+
+def mrf_sample_grid(word_count, adjacency_dict, neighbor_weight, grid):
+    """Does a single MRF grid sample using `word_count`, `adjacency_dict` and
+    `neighbor_weight` from the grid configuration `grid`
+    """
+    for chip in ALL_CHIPS:
+        terms_from_chip = np.argwhere(word_count[:, chip-1] > 0).flatten()
+        terms_from_neighbor = np.zeros(len(adjacency_dict[chip]), dtype=int)
+        
+        for i, nhbr in enumerate(adjacency_dict[chip]):
+            terms_from_neighbor[i] = grid[nhbr-1]
+
+        terms_combined = np.union1d(terms_from_chip, terms_from_neighbor)
+        term_freqs = np.zeros(terms_combined.shape)
+
+        for i, term in enumerate(terms_combined):
+            # count terms from our chip
+            term_freqs[i] += word_count[term, chip-1]
+            # print(f"For term {term} our chip inc freq by {word_count[term, chip-1]}")
+
+            # count weighted terms from neighbors
+            term_freqs[i] += neighbor_weight * np.sum(terms_from_neighbor == term)
+            # neighbor_freq = neighbor_weight * np.sum(terms_from_neighbor == term)
+            # print(f"For term {term} neighbors inc freq by {neighbor_freq}")
+
+        term_pmf =  softmax(term_freqs)
+        new_term = RNG.choice(terms_combined, 1, p=term_pmf)[0]
+        # if new_term != grid[chip-1]:
+        #     print(f"Sampled new term = {new_term}, for chip {chip}, old term was {grid[chip-1]}")
+        
+        # update grid
+        grid[chip-1] = new_term
+
+    return grid
+
+
+def mrf_sampler(word_count, adjacency_dict, neighbor_weight, num_restarts,
+        burn_in_iterations, num_to_generate):
+    """Completes the following sampling process
+    For `num_restart` runs:
+        1. Samples an initial grid configuration using `sample_initial_grid_state()`
+        with arguments `num_samples` = 15, `response_sample_fraction = 0.5`
+        2. Using this initial grid configuration, does MRF sampling of the grid for 
+        `burn_in_iterations` samples
+        3. After the burn in, samples `num_to_generate` grid samples and stores them
+    Returns the num_restarts * num_to_generate number of samples collection
+    """
+
+    INITIAL_GRID_NUM_SAMPLES = 15
+    INITIAL_GRID_RESPONSE_FRAC = 0.5
+
+    samples = []
+    
+    for restart in range(num_restarts):
+        # print(f"\nOn restart {restart+1}, sampling initial grid")
+        grid = sample_initial_grid_state(word_count, adjacency_dict, 
+                INITIAL_GRID_NUM_SAMPLES, INITIAL_GRID_RESPONSE_FRAC)
+
+        for iteration in range(burn_in_iterations):
+            # print(f"\tOn burn-in iteration {iteration+1}")
+            grid = mrf_sample_grid(word_count, adjacency_dict, neighbor_weight, grid)
+
+        # print()
+        for sample in range(num_to_generate):
+            # print(f"\tGenerating sample {sample+1}")
+            grid = mrf_sample_grid(word_count, adjacency_dict, neighbor_weight, grid)
+            samples.append(grid)
+
+
+    return samples
+
+def build_mrf_model_from_samples(samples):
+    """ builds the empirical chip distribution from the grids in samples
+        returns a dict which maps chipnum -> (dict of term_nums -> weight)
+        the weight is calculated based on the frequency of times term_num was used for chipnum"""
+   
+    num_samples = len(samples)
+    model = defaultdict(dict)
+    for chip in ALL_CHIPS:
+        terms_for_chip = np.zeros(num_samples, dtype=int)
+        for i, sample in enumerate(samples):
+            terms_for_chip[i] = sample[chip-1]+1
+        
+        terms, counts = np.unique(terms_for_chip, return_counts=True)
+        # print(f"terms = {terms} and counts = {counts}")
+
+        for i, t in enumerate(terms):
+            model[chip][t] = counts[i] / num_samples
+
+    return model
+
+
+def compute_KL_divs(p_model, q_model):
+    """Assumes that `p_model` and `q_model` are dicts of the form chipnum -> (termnum -> weight)
+    like those obtained from build_mrf_model_from_samples and build_simple_model
+    Returns an array of the KL divergences between each model on every chip
+
+    For each chip, we compute KL(p_model[chip] || q_model[chip])"""
+
+    divergences = np.zeros(NUM_CHIPS)
+
+    epsilon = 1E-8
+
+    for chip in ALL_CHIPS:
+        p = p_model[chip]
+        q = q_model[chip]
+
+        terms = set(p.keys()).union(q.keys())
+
+        for term in terms:
+            # if p[term] = 0, divergence computation is 0
+            if term not in p:
+                continue
+            # add in small positive if q[term] = 0
+            if term not in q:
+                # print(f"Term {term} was in in distribution Q!")
+                q[term] = epsilon
+            else:
+                divergences[chip-1] += p[term] * np.log(p[term] / q[term])
+
+    return divergences
+
+
+
 
 
 
