@@ -286,10 +286,6 @@ def build_simple_mle(word_count, term_map):
             mles[chip] = term_map[term+1]
             bcts.add(term_map[term+1])
             
-        # print("Row data for chip {}".format(chip))
-        # print(word_count[:, chip-1])
-        # print("for chip {} got mle = {}".format(chip, mle[chip]))
-    
     return mles, list(bcts), len(bcts)
 
 def color_term_grid(term_map, title, filename, lang):
@@ -589,7 +585,7 @@ def sample_initial_grid_state(word_count, adjacency_dict, num_samples, response_
         response_cdf[chip] = cdf
 
     for sample in range(num_samples):
-        print(f"Working on sample {sample+1} of grid")
+        # print(f"Working on sample {sample+1} of grid")
         for chip in ALL_CHIPS:
             p = RNG.uniform()
             # sample from response cdf
@@ -691,17 +687,17 @@ def mrf_sampler(word_count, adjacency_dict, neighbor_weight, num_restarts,
     samples = []
     
     for restart in range(num_restarts):
-        print(f"\nOn restart {restart+1}, sampling initial grid")
+        # print(f"\nOn restart {restart+1}, sampling initial grid")
         grid = sample_initial_grid_state(word_count, adjacency_dict, 
                 INITIAL_GRID_NUM_SAMPLES, INITIAL_GRID_RESPONSE_FRAC)
 
         for iteration in range(burn_in_iterations):
-            print(f"\tOn burn-in iteration {iteration+1}")
+            # print(f"\tOn burn-in iteration {iteration+1}")
             grid = mrf_sample_grid(word_count, adjacency_dict, neighbor_weight, grid)
 
-        print()
+        # print()
         for sample in range(num_to_generate):
-            print(f"\tGenerating sample {sample+1}")
+            # print(f"\tGenerating sample {sample+1}")
             grid = mrf_sample_grid(word_count, adjacency_dict, neighbor_weight, grid)
             samples.append(grid)
 
@@ -721,7 +717,7 @@ def build_mrf_model_from_samples(samples):
             terms_for_chip[i] = sample[chip-1]+1
         
         terms, counts = np.unique(terms_for_chip, return_counts=True)
-        print(f"terms = {terms} and counts = {counts}")
+        # print(f"terms = {terms} and counts = {counts}")
 
         for i, t in enumerate(terms):
             model[chip][t] = counts[i] / num_samples
@@ -745,7 +741,6 @@ def compute_KL_divs(p_model, q_model):
         q = q_model[chip]
 
         terms = set(p.keys()).union(q.keys())
-        print(f"For chip {chip}, terms from both dists are {terms}")
 
         for term in terms:
             # if p[term] = 0, divergence computation is 0
@@ -753,7 +748,7 @@ def compute_KL_divs(p_model, q_model):
                 continue
             # add in small positive if q[term] = 0
             if term not in q:
-                print(f"Term {term} was in in distribution Q!")
+                # print(f"Term {term} was in in distribution Q!")
                 q[term] = epsilon
             else:
                 divergences[chip-1] += p[term] * np.log(p[term] / q[term])
