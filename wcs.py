@@ -93,7 +93,7 @@ def build_term_map(language: int):
     return term_map
 
 def build_word_count(language: int):
-    """Returns a # of terms by NUM_CHIPS matrix where the (t,c) entry
+    """Returns a # of terms by NUM_CHIPS matrix where the (t-1,c-1) entry
     counts the number of times term t was used for chip c"""
     lang_dict = dictdf.loc[dictdf['language'] == language]
     lang_terms = termdf.loc[termdf['language'] == language]
@@ -288,8 +288,20 @@ def build_simple_mle(word_count, term_map):
             
     return mles, list(bcts), len(bcts)
 
-def color_term_grid(term_map, title, filename, lang):
-    """term_map should be a dict of chipnums -> TermData
+def build_chip_to_term_from_grid_sample(grid_sample, term_map):
+    """ grid sample is an array of length 330 where
+    grid_sample[c-1] = t-1 iff chip c is labeled term t
+    term_map is the language term_map made by `build_term_map()"""
+    chip_to_terms = {}
+    for chip in ALL_CHIPS:
+        term = grid_sample[chip-1] + 1
+        chip_to_terms[chip] = term_map[term]
+
+    return chip_to_terms
+
+
+def color_term_grid(chip_to_terms, title, filename, lang, use_contested=True):
+    """chip_to_terms should be a dict of chipnums -> TermData
     this function will collapse the term numbers to the range [0, # of unique terms]
     `title` and `filename` should be strings, and `lang` should be an int in the range 1 to 110
     Saves a grid with title Title {title} for Lang {lang} and 
@@ -309,11 +321,16 @@ def color_term_grid(term_map, title, filename, lang):
                  'xkcd:olive', 'xkcd:forest green', 'xkcd:deep blue',
                  'xkcd:purple blue', 'xkcd:chocolate', 'xkcd:charcoal', 
                  'xkcd:fuschia', 'xkcd:greyish purple']
-    if len(np.unique(term_map.values())) > len(cmap_list) - 1:
+
+    # drop pale yellow if we don't have contested chips
+    if not use_contested:
+        cmap_list = cmap_list[1:]
+
+    if len(np.unique(chip_to_terms.values())) > len(cmap_list) - 1:
         print("ERROR: too many cats, cmap does not have enough colors")
     
     # get a set of all mle_terms we will care about
-    mle_terms = set([(data.term, data.abbrev) for data in term_map.values()])
+    mle_terms = set([(data.term, data.abbrev) for data in chip_to_terms.values()])
     mle_terms.add((NO_TERM.term, NO_TERM.abbrev))
     # sort them and store abbreviation labels
     mle_terms = sorted(mle_terms)
@@ -329,7 +346,7 @@ def color_term_grid(term_map, title, filename, lang):
     for row in range(num_rows):
         for col in range(num_cols):
             if (row, col) in matrix_to_chipnum:
-                term = term_map[matrix_to_chipnum[(row, col)]].term
+                term = chip_to_terms[matrix_to_chipnum[(row, col)]].term
                 Z[row, col] = collapsed_terms[term]
                 collapsed_counts[collapsed_terms[term]] += 1
             else:
